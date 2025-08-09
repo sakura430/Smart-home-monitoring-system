@@ -1,0 +1,65 @@
+#include "tcp_connect.h"
+int tcp_connect(void) {
+    PrintToEsp01s("AT+CIPSTART=\"TCP\",\"47.115.220.165\",9001\r\n");
+
+    while (1) {
+        QueueSetMemberHandle_t set = xQueueSelectFromSet(QueueSet, portMAX_DELAY);
+
+if (set == queueUTools) {
+            static char str[MAX_SIZE] = {0};
+            char Data = 0;//用于接收队列中的数据
+            vTaskDelay(100);//等待中断发送完所有数据
+            UBaseType_t que_msg_num1 = uxQueueMessagesWaiting(queueUTools);
+
+            while (que_msg_num1 > 0) {
+                xQueueReceive(queueUTools, &Data, 0);
+                str[strlen(str)] = Data;
+                que_msg_num1--;
+            }
+
+            if (strlen(str) != 0) {
+                PrintToEsp01s("%s", str);
+                PrintToUTools("UTools :%s", str);
+                memset(str, 0, sizeof(str));
+            }
+        } else if (set == queueESP01s) {
+            static char str[MAX_SIZE] = {0};
+            char Data;
+            vTaskDelay(100);//等待中断发送完所有数据
+            UBaseType_t que_msg_num = uxQueueMessagesWaiting(queueESP01s);
+
+            while (que_msg_num > 0) {
+                xQueueReceive(queueESP01s, &Data, 0);
+                str[strlen(str)] = Data;
+                que_msg_num--;
+            }
+
+            if (strlen(str) != 0) {
+                PrintToUTools("Esp01s :%s", str);
+                char temp2[] = "CONNECT\r\n\r\nOK";
+                int ret2 = matchString(str, temp2, strlen(str), strlen(temp2));
+
+                if (ret2 == 1) {
+                    memset(str, 0, sizeof(str));
+                    OLED_UpdateDisplay("TcpConnectOK");
+                    LED_Control(RED, LED_OFF);
+                    return 1;
+                }
+
+                char temp[] = "ERROR\r\nCLOSED";
+                int ret = matchString(str, temp, strlen(str), strlen(temp));
+
+                if (ret == 1) {
+                    memset(str, 0, sizeof(str));
+                    OLED_UpdateDisplay("TcpConnectFail");
+                    OLED_UpdateDisplay("ServerERROR");
+                    LED_Control(RED, LED_SLOW_BLINK);
+                    //PrintToEsp01s("AT+CIPSTART=\"TCP\",\"47.115.220.165\",9001\r\n");
+                }
+
+                memset(str, 0, sizeof(str));
+            }
+        }
+    }
+}
+

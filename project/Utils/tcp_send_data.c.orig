@@ -1,0 +1,72 @@
+#include "tcp_send_data.h"
+#include "OLED.h"
+
+int tcp_send_data(char *name, uint16_t data) {
+    char str[100] = {0};
+	char val;
+    UBaseType_t que_msg_num = uxQueueMessagesWaiting(queueESP01s);
+    while (que_msg_num > 0) {
+        xQueueReceive(queueESP01s, &val, 0);
+        str[strlen(str)] = val;
+        que_msg_num--;
+    }
+	char temp[]="TIMEOUT";
+	int ret = matchString(str, temp, strlen(str), strlen(temp));
+
+                if (ret == 1) {
+                    memset(temp, 0, sizeof(str));
+                    return 1;
+                }
+    char http[100];
+    sprintf(http, "GET /0?%s:%u?HTTP/1.1", name, data);
+    PrintToEsp01s("%s", http);
+
+    while (1) {
+        QueueSetMemberHandle_t set = xQueueSelectFromSet(QueueSet, portMAX_DELAY);
+
+        if (set == queueESP01s) {
+            static char str[MAX_SIZE] = {0};
+            char Data;
+            vTaskDelay(100);//等待中断发送完所有数据
+            UBaseType_t que_msg_num = uxQueueMessagesWaiting(queueESP01s);
+
+            while (que_msg_num > 0) {
+                xQueueReceive(queueESP01s, &Data, 0);
+                str[strlen(str)] = Data;
+                que_msg_num--;
+            }
+
+            if (strlen(str) != 0) {
+                PrintToUTools("Esp01s :%s", str);
+                char temp[] = "HTTP/1.1 200 OK";
+                int ret = matchString(str, temp, strlen(str), strlen(temp));
+
+                if (ret == 1) {
+                    memset(str, 0, sizeof(str));
+                    return 1;
+                }
+
+                char temp2[] = "TIMEOUT";
+                int ret2 = matchString(str, temp2, strlen(str), strlen(temp2));
+
+                if (ret2 == 1) {
+                    //TODO
+                    time_flag = TIMEOUT;
+                    esp01s_close();
+                    return 1;
+                }
+
+                memset(str, 0, sizeof(str));
+            }
+        }
+    }
+}
+
+
+
+
+
+
+
+
+

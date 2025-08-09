@@ -1,0 +1,227 @@
+#include "wifi_connect.h"
+#include "flash.h"
+#include "esp01s_switch.h"
+#include "Delay.h"
+#include "IWDG.h"
+int wifi_connect(void) {
+    static char str_wifi[40] = {0};//存储WiFi信息
+    PrintToEsp01s("+++");
+    vTaskDelay(1000);
+    char WifiName[20] = {0};
+    char WifiPassword[20] = {0};
+    PrintToEsp01s("AT+CWJAP_DEF?\r\n");
+
+    while (1) {
+        QueueSetMemberHandle_t set = xQueueSelectFromSet(QueueSet, portMAX_DELAY);
+
+        if (set == queueUTools) {
+            char str[MAX_SIZE] = {0};
+            char Data = 0;//用于接收队列中的数据
+            vTaskDelay(100);//等待中断发送完所有数据
+            UBaseType_t que_msg_num = uxQueueMessagesWaiting(queueUTools);
+
+            while (que_msg_num > 0) {
+                xQueueReceive(queueUTools, &Data, 0);
+                str[strlen(str)] = Data;
+                que_msg_num--;
+            }
+
+            if (strlen(str) != 0) {
+                PrintToEsp01s("%s", str);
+                PrintToUTools("UTools :%s", str);
+                memset(str, 0, sizeof(str));
+            }
+        } else if (set == queueESP01s) {
+            char str[MAX_SIZE] = {0};
+            char Data = 0;//用于接收队列中的数据
+            vTaskDelay(100);//等待中断发送完所有数据
+            UBaseType_t que_msg_num = uxQueueMessagesWaiting(queueESP01s);
+
+            while (que_msg_num > 0) {
+                xQueueReceive(queueESP01s, &Data, 0);
+                str[strlen(str)] = Data;
+                que_msg_num--;
+            }
+
+            if (strlen(str) != 0) {
+                PrintToUTools("Esp01s :%s", str);
+                char *temp = strstr(str, "No AP\r\n\r\nOK");
+
+                if (temp != NULL) {
+                    int status = 0;
+                    int address = 0x0800F000;
+                    status = *((__IO uint32_t *)(address));
+
+                    if (status != 0xFFFFFFFF) {
+                        // 有内容
+                        char buffer[40] = {0};
+                        readFlash(address + 8, buffer, 40);
+                        PrintToUTools("read:%s \r\n",  buffer);
+
+                        if (buffer[0] != 0) {
+                            sscanf(buffer, "!%[^=]=%[^!]!", WifiName, WifiPassword);
+                            PrintToEsp01s("AT+CWJAP_DEF=\"%s\",\"%s\"\r\n", WifiName, WifiPassword);
+                        }
+                    } else {
+                        LED_Control(RED, LED_SLOW_BLINK); //红灯慢闪等待wifi
+                        OLED_UpdateDisplay("WaitWifi");
+                        PrintToUTools("flash is empty\r\n");
+                    }
+
+                    continue;
+                }
+
+
+                char *temp2 = strstr(str, "+CWJAP:1"); //wifi密码错误
+
+                if (temp2 != NULL) {
+                    PrintToUTools("Esp01s :wifi connect fail\r\n");
+                    OLED_UpdateDisplay("WifiConnectFail");
+                    continue;
+                }
+
+				//Todo：改变wifi名称后无法从本地切回网络
+				//解决方案：外接按键，长按3秒flash复位
+				//Todo：首次联网手机发送wifi信息时账号写错
+                char *temp3 = strstr(str, "+CWJAP:3"); //找不到AP
+                if (temp3 != NULL) {
+                    PrintToUTools("Esp01s :wifi connect fail\r\n");
+                    OLED_UpdateDisplay("WifiConnectFail");
+					int status = 0;
+                    int address = 0x0800F000;
+                    status = *((__IO uint32_t *)(address));
+                    if (status != 0xFFFFFFFF) {
+					      int switch_cmd = 0;
+                    xQueueSend(xTaskStatusQueue, &switch_cmd, 0);
+                    return 0;	
+					}else{
+						continue;
+					}
+
+                }
+
+                char *temp4 = strstr(str, "+CWJAP_DEF:");
+
+                if (temp4 != NULL) {
+                    OLED_UpdateDisplay("ConnectWifiOK");
+                    LED_Control(RED, LED_OFF);
+                    return 1;
+                }
+
+//                char *temp5 = strstr(str, "WIFI GOT IP");
+//                static int flag = 0;
+
+//                if (temp5 != NULL) {
+//                    flag = 1;
+//                }
+
+                char *temp6 = strstr(str, "OK");
+
+                if (temp6 != NULL) {
+                    PrintToHc05("{\"status\":0, \"wifi_name\":\"%s\"}", WifiName);
+
+				//if (flag == 1) {
+                        if (strlen(str_wifi) != 0) {//如果是通过蓝牙联网
+                            int address = 0x0800F000;
+                            erasePage(address);
+                            changeFlashFor32(address, 6);
+                            changeFlashFor32(address + 4, strlen(str_wifi));
+                            PrintToUTools("str_wifi :%s\r\n", str_wifi);
+
+                            for (int i = 0; i < sizeof(str_wifi); i += 4) {
+                                changeFlashFor32(address + 8 + i, *(int *)(str_wifi + i));
+                            }
+                        }
+
+                        
+                        OLED_UpdateDisplay("ConnectWifiOK");
+                        LED_Control(RED, LED_OFF);
+						IWDG_Init();
+                        return 1;
+                   // }
+                }
+            }
+        } else if (set == queueHC05) {
+            char str[MAX_SIZE] = {0};
+            char Data = 0;//用于接收队列中的数据
+            vTaskDelay(100);//等待中断发送完所有数据
+            UBaseType_t que_msg_num = uxQueueMessagesWaiting(queueHC05);
+
+            while (que_msg_num > 0) {
+                xQueueReceive(queueHC05, &Data, 0);
+                str[strlen(str)] = Data;
+                que_msg_num--;
+            }
+
+            if (strlen(str) != 0) {
+                memset(WifiName, 0, sizeof(WifiName));
+                memset(WifiPassword, 0, sizeof(WifiPassword));
+                sscanf(str, "!%[^=]=%[^!]!", WifiName, WifiPassword);
+                strncpy(str_wifi, str, strlen(str));
+                PrintToUTools("wifi:%s\r\n", str);
+                PrintToUTools("WifiName:%s\r\n", WifiName);
+                PrintToUTools("WifiPassword:%s\r\n", WifiPassword);
+                PrintToEsp01s("AT+CWJAP_DEF=\"%s\",\"%s\"\r\n", WifiName, WifiPassword);
+            }
+        }
+    }
+}
+
+int quick_wifi_check(void) {
+    char WifiName[20] = {0};
+    char WifiPassword[20] = {0};
+    PrintToEsp01s("AT+CWJAP_DEF?\r\n");
+
+    for (int i = 0; i < 3; i++) {
+        QueueSetMemberHandle_t set = xQueueSelectFromSet(QueueSet, 500);
+
+        if (set == queueESP01s) {
+            char str[MAX_SIZE] = {0};
+            char Data = 0;//用于接收队列中的数据
+            Delay_Ms(100);//等待中断发送完所有数据
+            UBaseType_t que_msg_num = uxQueueMessagesWaiting(queueESP01s);
+
+            while (que_msg_num > 0) {
+                xQueueReceive(queueESP01s, &Data, 0);
+                str[strlen(str)] = Data;
+                que_msg_num--;
+            }
+
+            if (strlen(str) != 0) {
+                PrintToUTools("Esp01s :%s", str);
+                char *temp = strstr(str, "No AP\r\n\r\nOK");
+
+                if (temp != NULL) {
+                    OLED_UpdateDisplay("WaitWifi");
+                    int status = 0;
+                    int address = 0x0800F000;
+                    status = *((__IO uint32_t *)(address));
+
+                    if (status != 0xFFFFFFFF) {
+                        // 有内容
+                        char buffer[40] = {0};
+                        readFlash(address + 8, buffer, 40);
+                        PrintToUTools("read:%s \r\n",  buffer);
+
+                        if (buffer[0] != 0) {
+                            sscanf(buffer, "!%[^=]=%[^!]!", WifiName, WifiPassword);
+                            PrintToEsp01s("AT+CWJAP_DEF=\"%s\",\"%s\"\r\n", WifiName, WifiPassword);
+                        }
+                    }
+
+                    continue;
+                }
+
+                char *temp2 = strstr(str, "OK");
+
+                if (temp2 != NULL) {
+                    OLED_UpdateDisplay("ConnectWifiOK");
+                    LED_Control(RED, LED_OFF);
+                    return 1;
+                }
+            }
+        }
+    }
+
+    return 0;
+}
